@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+    <link rel="stylesheet" type="text/css" href="css/ol.css"/>
+    <script src="js/ol.js"></script>
+    <script src="js/turf.min.js"></script>
+</head>
+<body>
+<div id="map" style="width: 100%;height:100%"></div>
+
+</body>
+<script>
+    var projection = ol.proj.get('EPSG:4326');
+    var projectionExtent = projection.getExtent();
+    var size = ol.extent.getWidth(projectionExtent) / 256;
+    var resolutions = new Array(19);
+    var matrixIds = new Array(19);
+    for (var z = 1; z < 19; ++z) {
+        resolutions[z] = size / Math.pow(2, z);
+        matrixIds[z] = z;
+    }
+    var map = new ol.Map({
+        layers:[
+            new ol.layer.Tile({
+                source: new ol.source.WMTS({
+                    name: "天地图影像地图",
+                    url: "http://t{0-7}.tianditu.gov.cn/vec_c/wmts?tk=换成你的天地图的token",
+                    layer: "vec",
+                    style: "default",
+                    matrixSet: "c",
+                    format: "tiles",
+                    wrapX: true,
+                    //地图缩小后，防止在一个页面出现多个一样的地图
+                    tileGrid: new ol.tilegrid.WMTS({
+                        origin: ol.extent.getTopLeft(projectionExtent),
+                        resolutions: resolutions,
+                        //slice方法不清楚的请百度
+                        matrixIds: matrixIds
+                    })
+                }),
+                maxResolution: resolutions[0],
+                minResolution: resolutions[18]
+            })
+        ],
+        target: "map",
+        view: new ol.View({
+            center: [101.71922,26.586742],//地图中心点
+            projection:ol.proj.get('EPSG:4326'),//地图投影坐标
+            zoom: 4,//最小展示级别
+            maxZoom: 18,//最大缩放级别
+            minZoom: 0 //最小缩放级别
+        })
+    });
+
+    var aaastyles = {
+        'route': new ol.style.Style({
+            stroke: new ol.style.Stroke({
+                width: 6, color: [237, 212, 0, 0.8]
+            })
+        }),
+        'icon': new ol.style.Style({
+            image: new ol.style.Icon({
+                anchor: [0.5, 1],
+                src: 'images/icon.png'
+            })
+        }),
+        'geoMarker': new ol.style.Style({
+            image: new ol.style.Circle({
+                radius: 7,
+                fill: new ol.style.Fill({color: 'black'}),
+                stroke: new ol.style.Stroke({
+                    color: 'white', width: 2
+                })
+            })
+        })
+    };
+    var animating = false;
+    var speed, now;
+    var geoMarker = new ol.Feature({
+        type: 'geoMarker',
+        geometry:new ol.geom.Point([120.97202539443971,29.149083495140076])
+    });
+    var routeCoords =
+        [[120.97202539443971,29.149083495140076],
+            [121.27202539443971,29.149083495140076],
+            [121.99202539443971,29.149083495140076],
+            [122.27202539443971,29.149083495140076],
+            [123.27202539443971,29.149083495140076],
+            [123.97202539443971,29.149083495140076],
+            [125.0260719060898,30.149083495140076],[129.0260719060898,29.115327894687653]]
+    var route = new ol.geom.LineString(routeCoords);
+    var routeFeature = new ol.Feature({
+        type: 'route',
+        geometry: route
+    });
+
+    var vectorLayer = new ol.layer.Vector({
+        source: new ol.source.Vector({
+            features: [routeFeature,geoMarker]
+        }),
+        style: function(feature) {
+            // hide geoMarker if animation is active
+            if (animating && feature.get('type') === 'geoMarker') {
+                return null;
+            }
+            return aaastyles[feature.get('type')];
+        }
+    });
+    map.addLayer(vectorLayer);
+    var totaltime;
+    var moveFeature = function(event) {
+        var vectorContext = event.vectorContext;
+        var frameState = event.frameState;
+        if (animating) {
+            var elapsedTime = frameState.time - now;
+            var currentPoint = route.getCoordinateAt(elapsedTime/totaltime);// 这里用到了LineString 对象中的getCoordinateAt的方法,来获取当前时间对应的点坐标
+            var scale = parseFloat(elapsedTime)/parseFloat(totaltime);
+            console.log(scale);
+            if(scale>=1){
+                stopAnimation(true);
+                return;
+            }else{
+                var currentPoint;
+                currentPoint = new ol.geom.Point(route.getCoordinateAt(scale));
+                var feature = new ol.Feature(currentPoint);
+                vectorContext.drawFeature(feature, aaastyles.geoMarker);
+            }
+        }
+        map.render();
+    };
+    function startAnimation() {
+        // totaltime = formatLength(route.getCoordinates())/100*1000;//假设速度为100m/s
+        totaltime = formatLengthByTurf(routeFeature)/100*1000;
+        if (animating) {
+            stopAnimation(false);
+        } else {
+            animating = true;
+            now = new Date().getTime();
+            geoMarker.setStyle(null);
+            map.on('postcompose', moveFeature);
+            map.render();
+        }
+    }
+
+    function formatLength(coordinates){
+        var length = 0;
+        var sourceProj = map.getView().getProjection();
+        for (var i = 0, ii = coordinates.length - 1; i < ii; ++i) {
+            var c1 = ol.proj.transform(coordinates[i], sourceProj, "EPSG:4326");
+            var c2 = ol.proj.transform(coordinates[i + 1], sourceProj, "EPSG:4326");
+            length += ol.sphere.getDistance(c1, c2);
+        }
+        var output = (Math.round(length * 100) / 100/1000);
+        return output;
+    }
+
+    function formatLengthByTurf(lineFeature){
+        var format = new ol.format.GeoJSON();
+        var length = turf.length(format.writeFeatureObject(lineFeature), {units: 'kilometers'})
+        return length;
+    }
+
+    function stopAnimation(ended) {
+        animating = false;
+
+        // if animation cancelled set the marker at the beginning
+        var coord = ended ? routeCoords[routeLength - 1] : routeCoords[0];
+        var geometry = geoMarker.getGeometry();
+        geometry.setCoordinates(coord);
+        //remove listener
+        vectorLayer.un('postrender', moveFeature);
+    }
+
+</script>
+</html>
